@@ -31,14 +31,37 @@ logger = logging.getLogger(__name__)
 class OralAssistant:
     """口语训练助手主类"""
     
-    def __init__(self):
-        """初始化助手"""
+    def __init__(self, enable_wake_word: bool = True):
+        """
+        初始化助手
+        
+        Args:
+            enable_wake_word: 是否启用唤醒词检测（持续监听模式）
+        """
         logger.info("初始化口语训练助手...")
         
         # 初始化各模块
         self.tts = TextToSpeech(auto_load=True)
         self.audio_processor = RaspberryPiAudioProcessor()
         self.speech_rater = SpeechRater()
+        
+        # 唤醒词检测器（可选）
+        self.wake_detector = None
+        self._wake_detected = False
+        self._wake_lock = threading.Lock()
+        
+        if enable_wake_word:
+            try:
+                from asr.wake_word_detector import WakeWordDetector
+                self.wake_detector = WakeWordDetector(
+                    wake_keywords=["assistant", "voice assistant", "语音助手"]
+                )
+                # 设置唤醒回调
+                self.wake_detector.set_wake_callback(self._on_wake_detected)
+                logger.info("唤醒词检测器已启用")
+            except Exception as e:
+                logger.warning(f"无法初始化唤醒词检测器: {e}，将使用文本输入模式")
+                self.wake_detector = None
         
         # 题库路径
         self.question_bank_path = os.path.join(os.path.dirname(__file__), "doc", "口语题库.docx")
@@ -47,7 +70,16 @@ class OralAssistant:
         # 录音文件路径
         self.recorded_audio_path = "recorded_response.wav"
         
+        # 运行模式
+        self.continuous_mode = enable_wake_word and self.wake_detector is not None
+        
         logger.info("口语训练助手初始化完成")
+    
+    def _on_wake_detected(self, keyword: str):
+        """唤醒词检测回调"""
+        with self._wake_lock:
+            self._wake_detected = True
+        logger.info(f"唤醒词检测回调: {keyword}")
     
     def _load_questions(self) -> list:
         """
@@ -94,50 +126,50 @@ class OralAssistant:
         print("\n" + "="*50)
         print("口语训练助手已启动")
         print("="*50)
-        print("\n提示：说出包含'语音助手'的语句来唤醒（例如：'你好，语音助手'）")
-        print("或者输入 'start' 开始练习，输入 'quit' 退出")
         
         wake_keywords = ["语音助手", "voice assistant", "assistant"]
         
-        while True:
+        # 如果启用了唤醒词检测器，启动持续监听
+        if self.wake_detector:
+            print("\n提示：说出唤醒词来启动练习（例如：'voice assistant' 或 '语音助手'）")
+            print("或者输入 'start' 开始练习，输入 'quit' 退出")
+            
             try:
-                # 方式1：尝试语音唤醒（如果ASR可用）
-                wake_text = self._listen_for_wake_word()
+                # 启动唤醒词检测器
+                self.wake_detector.start_listening()
+                print("正在监听唤醒词...")
                 
-                if wake_text:
-                    # 检测是否包含唤醒关键词
-                    wake_text_lower = wake_text.lower()
-                    if any(keyword.lower() in wake_text_lower for keyword in wake_keywords):
-                        logger.info(f"检测到唤醒词: {wake_text}")
-                        print(f"\n检测到唤醒词: {wake_text}")
-                        self.tts.speak("Hello, I'm ready to help you practice English.", blocking=True)
-                        return True
-                    else:
-                        logger.debug(f"未检测到唤醒词: {wake_text}")
-                        continue
+                # 重置唤醒标志
+                with self._wake_lock:
+                    self._wake_detected = False
                 
-                # 方式2：文本输入（备用方案）
-                user_input = input("\n输入命令 (或直接按Enter继续语音检测): ").strip()
-                
-                if not user_input:
-                    continue
-                
-                user_input_lower = user_input.lower()
-                
-                # 检测唤醒关键词
-                if any(keyword.lower() in user_input_lower for keyword in wake_keywords):
-                    logger.info(f"文本唤醒: {user_input}")
-                    self.tts.speak("Hello, I'm ready to help you practice English.", blocking=True)
-                    return True
-                elif user_input.lower() in ['start', 's']:
-                    # 直接开始（兼容旧方式）
-                    logger.info("用户直接开始")
-                    return True
-                elif user_input.lower() in ['quit', 'q', 'exit']:
-                    logger.info("用户退出")
-                    return False
-                else:
-                    print("未检测到唤醒词，请说出包含'语音助手'的语句")
+                # 持续监听，直到检测到唤醒词或用户输入
+                while True:
+                    # 检查是否检测到唤醒词
+                    with self._wake_lock:
+                        if self._wake_detected:
+                            self._wake_detected = False
+                            logger.info("检测到唤醒词，开始练习")
+                            print("\n✓ 检测到唤醒词！")
+                            self.tts.speak("Hello, I'm ready to help you practice English.", blocking=True)
+                            return True
+                    
+                    # 非阻塞检查用户输入（使用select或timeout）
+                    import select
+                    import sys
+                    
+                    # 检查是否有输入（非阻塞）
+                    if select.select([sys.stdin], [], [], 0.1)[0]:
+                        user_input = input().strip()
+                        
+                        if user_input.lower() in ['start', 's']:
+                            logger.info("用户直接开始")
+                            return True
+                        elif user_input.lower() in ['quit', 'q', 'exit']:
+                            logger.info("用户退出")
+                            return False
+                    
+                    time.sleep(0.1)  # 短暂休眠，避免CPU占用过高
                     
             except KeyboardInterrupt:
                 logger.info("用户中断")
@@ -148,27 +180,61 @@ class OralAssistant:
                 user_input = input("\n唤醒检测出错，是否直接开始？(y/n): ").strip().lower()
                 if user_input == 'y':
                     return True
+            finally:
+                # 停止唤醒词检测器
+                if self.wake_detector:
+                    self.wake_detector.stop_listening()
+        else:
+            # 文本输入模式（备用方案）
+            print("\n提示：输入 'start' 开始练习，输入 'quit' 退出")
+            
+            while True:
+                try:
+                    user_input = input("\n输入命令: ").strip()
+                    
+                    if not user_input:
+                        continue
+                    
+                    user_input_lower = user_input.lower()
+                    
+                    # 检测唤醒关键词
+                    if any(keyword.lower() in user_input_lower for keyword in wake_keywords):
+                        logger.info(f"文本唤醒: {user_input}")
+                        self.tts.speak("Hello, I'm ready to help you practice English.", blocking=True)
+                        return True
+                    elif user_input.lower() in ['start', 's']:
+                        logger.info("用户直接开始")
+                        return True
+                    elif user_input.lower() in ['quit', 'q', 'exit']:
+                        logger.info("用户退出")
+                        return False
+                    else:
+                        print("未检测到唤醒词，请输入 'start' 开始")
+                        
+                except KeyboardInterrupt:
+                    logger.info("用户中断")
+                    return False
+                except Exception as e:
+                    logger.error(f"输入处理出错: {e}")
+                    continue
     
     def _listen_for_wake_word(self) -> str:
         """
         监听唤醒词
-        如果ASR功能可用，则进行语音识别
+        如果唤醒词检测器可用，则进行语音识别
         否则返回None，使用文本输入
         
         Returns:
-            识别到的文本，如果未识别或ASR不可用则返回None
+            识别到的文本，如果未识别或检测器不可用则返回None
         """
         try:
-            # TODO: 集成ASR功能进行唤醒词检测
-            # 这里可以集成whisper或vosk进行实时语音识别
-            # 示例：
-            # import whisper
-            # model = whisper.load_model("base")
-            # result = model.transcribe(audio_stream)
-            # return result["text"]
-            
-            # 当前实现：返回None，使用文本输入
-            return None
+            # 使用唤醒词检测器
+            if hasattr(self, 'wake_detector') and self.wake_detector:
+                # 唤醒词检测器在后台持续监听，通过回调函数通知
+                # 这里返回None，实际唤醒通过回调处理
+                return None
+            else:
+                return None
             
         except Exception as e:
             logger.debug(f"语音唤醒检测不可用: {e}")
@@ -406,18 +472,32 @@ class OralAssistant:
             print(f"\n程序出错: {e}")
         finally:
             # 清理资源
+            if self.wake_detector:
+                self.wake_detector.cleanup()
             self.audio_processor.cleanup()
 
 
 def main():
     """主函数"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='树莓派英语口语练习助手')
+    parser.add_argument('--no-wake-word', action='store_true', 
+                       help='禁用唤醒词检测，使用文本输入模式')
+    parser.add_argument('--daemon', action='store_true',
+                       help='后台运行模式（用于systemd服务）')
+    
+    args = parser.parse_args()
+    
     print("="*50)
     print("基于树莓派的英语口语训练助手")
     print("="*50)
     print("\n系统初始化中...")
     
     try:
-        assistant = OralAssistant()
+        # 根据参数决定是否启用唤醒词
+        enable_wake = not args.no_wake_word
+        assistant = OralAssistant(enable_wake_word=enable_wake)
         assistant.run()
     except Exception as e:
         logger.error(f"初始化失败: {e}", exc_info=True)

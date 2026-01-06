@@ -1,0 +1,24 @@
+[Unit]
+Description=树莓派英语口语练习助手
+After=network.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/Desktop/AI_Oral_Assistant
+Environment="PATH=/home/pi/miniconda3/envs/oral_assistant/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/pi/miniconda3/envs/oral_assistant/bin/python /home/pi/Desktop/AI_Oral_Assistant/main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# 资源限制（可选，根据树莓派性能调整）
+# MemoryLimit=512M
+# CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target
+
