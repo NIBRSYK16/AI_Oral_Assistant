@@ -496,10 +496,6 @@ sudo usermod -a -G audio $USER
 - [ ] 添加历史记录功能
 - [ ] 添加可视化界面
 
-## 许可证
-
-本项目仅供学习和研究使用。
-
 ## 参考资料
 
 - Piper TTS: https://github.com/rhasspy/piper
