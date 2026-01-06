@@ -12,7 +12,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 class Config:
     # 音频参数
     SAMPLE_RATE = 16000
-    CHANNELS = 6
+    CHANNELS = 1  # 默认1通道，适配USB麦克风（如果有多通道设备会自动检测）
     CHUNK_SIZE = 1024
     
     # 波束形成参数

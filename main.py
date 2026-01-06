@@ -8,6 +8,7 @@ import sys
 import time
 import random
 import logging
+import threading
 from pathlib import Path
 
 # 添加项目根目录到路径（只添加一次，避免模块冲突）
@@ -134,9 +135,11 @@ class OralAssistant:
             print("\n提示：说出唤醒词来启动练习（例如：'voice assistant' 或 '语音助手'）")
             print("或者输入 'start' 开始练习，输入 'quit' 退出")
             
+            wake_listening_started = False
             try:
                 # 启动唤醒词检测器
                 self.wake_detector.start_listening()
+                wake_listening_started = True
                 print("正在监听唤醒词...")
                 
                 # 重置唤醒标志
@@ -176,14 +179,51 @@ class OralAssistant:
                 return False
             except Exception as e:
                 logger.error(f"唤醒检测出错: {e}")
-                # 出错时允许直接开始
-                user_input = input("\n唤醒检测出错，是否直接开始？(y/n): ").strip().lower()
-                if user_input == 'y':
-                    return True
+                print(f"\n警告: 唤醒词检测启动失败 ({e})")
+                print("已自动切换到文本输入模式")
+                # 回退到文本输入模式，继续等待用户输入
+                wake_listening_started = False
             finally:
-                # 停止唤醒词检测器
-                if self.wake_detector:
-                    self.wake_detector.stop_listening()
+                # 停止唤醒词检测器（如果已启动）
+                if wake_listening_started and self.wake_detector:
+                    try:
+                        self.wake_detector.stop_listening()
+                    except Exception as e:
+                        logger.warning(f"停止唤醒词检测器时出错: {e}")
+            
+            # 如果唤醒词检测失败，回退到文本输入模式
+            if not wake_listening_started:
+                print("\n提示：输入 'start' 开始练习，输入 'quit' 退出")
+                
+                while True:
+                    try:
+                        user_input = input("\n输入命令: ").strip()
+                        
+                        if not user_input:
+                            continue
+                        
+                        user_input_lower = user_input.lower()
+                        
+                        # 检测唤醒关键词
+                        if any(keyword.lower() in user_input_lower for keyword in wake_keywords):
+                            logger.info(f"文本唤醒: {user_input}")
+                            self.tts.speak("Hello, I'm ready to help you practice English.", blocking=True)
+                            return True
+                        elif user_input.lower() in ['start', 's']:
+                            logger.info("用户直接开始")
+                            return True
+                        elif user_input.lower() in ['quit', 'q', 'exit']:
+                            logger.info("用户退出")
+                            return False
+                        else:
+                            print("未检测到唤醒词，请输入 'start' 开始")
+                            
+                    except KeyboardInterrupt:
+                        logger.info("用户中断")
+                        return False
+                    except Exception as e:
+                        logger.error(f"输入处理出错: {e}")
+                        continue
         else:
             # 文本输入模式（备用方案）
             print("\n提示：输入 'start' 开始练习，输入 'quit' 退出")

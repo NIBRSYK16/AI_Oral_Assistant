@@ -80,34 +80,90 @@ class RaspberryPiAudioProcessor:
         
         return devices
     
-    def find_6ch_device(self):
+    def find_device(self):
         """
-        查找6通道麦克风设备
+        查找合适的音频输入设备
+        优先查找支持配置通道数的设备，否则使用默认设备
         
         Returns:
-            设备索引，如果未找到返回None
+            设备索引，如果未找到返回None（使用默认设备）
         """
+        # 首先尝试查找支持配置通道数的设备
         for i in range(self.p.get_device_count()):
             dev_info = self.p.get_device_info_by_index(i)
             if dev_info['maxInputChannels'] >= self.channels:
-                logger.info(f"找到多通道设备: {dev_info['name']}")
+                logger.info(f"找到支持 {self.channels} 通道的设备: {dev_info['name']}")
                 return i
         
-        logger.warning("未找到6通道麦克风设备，使用默认设备")
-        return None
+        # 如果没找到，使用默认设备
+        default_device = self.p.get_default_input_device_info()
+        logger.info(f"未找到支持 {self.channels} 通道的设备，使用默认设备: {default_device['name']}")
+        return default_device['index']
     
     def record_callback(self, in_data, frame_count, time_info, status):
         """录音回调函数"""
         if self.is_recording:
             # 将数据放入队列
             data = np.frombuffer(in_data, dtype=np.int16)
-            # 重新整形为多通道
-            data = data.reshape(-1, self.channels).T  # 转换为(channels, samples)
+            
+            # 根据通道数处理数据
+            if self.channels == 1:
+                # 单通道：转换为(1, samples)格式，保持一致性
+                data = data.reshape(1, -1)
+            else:
+                # 多通道：重新整形为(channels, samples)
+                data = data.reshape(-1, self.channels).T
             
             if not self.audio_buffer.full():
                 self.audio_buffer.put(data)
         
         return (None, pyaudio.paContinue)
+    
+    def _get_supported_sample_rate(self, device_index: int = None) -> int:
+        """
+        获取设备支持的采样率
+        如果目标采样率不支持，尝试其他常用采样率
+        
+        Args:
+            device_index: 音频设备索引
+            
+        Returns:
+            支持的采样率
+        """
+        if device_index is None:
+            device_index = self.p.get_default_input_device_info()['index']
+        
+        device_info = self.p.get_device_info_by_index(device_index)
+        default_rate = int(device_info['defaultSampleRate'])
+        
+        # 常用采样率列表（按优先级排序）
+        preferred_rates = [self.sample_rate, 44100, 48000, 22050, 32000, 16000, 8000]
+        
+        # 首先尝试目标采样率
+        if self.sample_rate in preferred_rates:
+            preferred_rates.insert(0, self.sample_rate)
+        
+        # 测试每个采样率
+        for rate in preferred_rates:
+            try:
+                # 尝试打开一个测试流
+                test_stream = self.p.open(
+                    format=self.format,
+                    channels=self.channels,
+                    rate=rate,
+                    input=True,
+                    frames_per_buffer=self.chunk_size,
+                    input_device_index=device_index
+                )
+                test_stream.close()
+                logger.info(f"找到支持的采样率: {rate} Hz (设备默认: {default_rate} Hz)")
+                return rate
+            except Exception:
+                continue
+        
+        # 如果都不支持，使用设备默认采样率
+        logger.warning(f"无法使用目标采样率 {self.sample_rate} Hz，使用设备默认采样率: {default_rate} Hz")
+        return default_rate
     
     def start_recording(self, device_index=None, duration=None):
         """
@@ -120,34 +176,61 @@ class RaspberryPiAudioProcessor:
         logger.info("开始录音...")
         
         if device_index is None:
-            device_index = self.find_6ch_device()
+            device_index = self.find_device()
         
-        # 打开音频流
-        stream = self.p.open(
-            format=self.format,
-            channels=self.channels,
-            rate=self.sample_rate,
-            input=True,
-            frames_per_buffer=self.chunk_size,
-            input_device_index=device_index,
-            stream_callback=self.record_callback
-        )
+        # 检测设备实际支持的通道数
+        device_info = self.p.get_device_info_by_index(device_index)
+        max_channels = device_info['maxInputChannels']
+        actual_channels = min(self.channels, max_channels)
         
-        self.is_recording = True
+        if actual_channels != self.channels:
+            logger.warning(f"设备只支持 {max_channels} 通道，使用 {actual_channels} 通道（配置要求 {self.channels} 通道）")
+            # 临时修改通道数
+            original_channels = self.channels
+            self.channels = actual_channels
         
-        # 启动处理线程
-        process_thread = threading.Thread(target=self.process_audio)
-        process_thread.daemon = True
-        process_thread.start()
+        # 自动检测并适配采样率
+        actual_sample_rate = self._get_supported_sample_rate(device_index)
+        if actual_sample_rate != self.sample_rate:
+            logger.info(f"采样率从 {self.sample_rate} Hz 调整为 {actual_sample_rate} Hz")
+            original_sample_rate = self.sample_rate
+            self.sample_rate = actual_sample_rate
         
-        if duration:
-            # 定时停止
-            time.sleep(duration)
-            self.stop_recording(stream)
-        else:
-            # 等待用户停止
-            input("按Enter键停止录音...")
-            self.stop_recording(stream)
+        try:
+            # 打开音频流
+            stream = self.p.open(
+                format=self.format,
+                channels=self.channels,
+                rate=self.sample_rate,
+                input=True,
+                frames_per_buffer=self.chunk_size,
+                input_device_index=device_index,
+                stream_callback=self.record_callback
+            )
+            
+            self.is_recording = True
+            
+            # 启动处理线程
+            process_thread = threading.Thread(target=self.process_audio)
+            process_thread.daemon = True
+            process_thread.start()
+            
+            if duration:
+                # 定时停止
+                time.sleep(duration)
+                self.stop_recording(stream)
+            else:
+                # 等待用户停止
+                input("按Enter键停止录音...")
+                self.stop_recording(stream)
+        except Exception as e:
+            # 如果出错，恢复原始通道数和采样率
+            if 'original_channels' in locals():
+                self.channels = original_channels
+            if 'original_sample_rate' in locals():
+                self.sample_rate = original_sample_rate
+            logger.error(f"录音启动失败: {e}")
+            raise
     
     def stop_recording(self, stream):
         """
@@ -179,8 +262,13 @@ class RaspberryPiAudioProcessor:
                 # 从队列获取数据
                 chunk = self.audio_buffer.get(timeout=0.5)
                 
-                # 1. 波束形成
-                enhanced = self.beamformer.delay_and_sum(chunk)
+                # 1. 波束形成（如果只有1通道，跳过波束形成）
+                if self.channels == 1:
+                    # 单通道：直接使用，不需要波束形成
+                    enhanced = chunk[0]  # 提取单通道数据
+                else:
+                    # 多通道：执行波束形成
+                    enhanced = self.beamformer.delay_and_sum(chunk)
                 
                 # 2. 去噪
                 final = self.denoiser.denoise(enhanced, self.sample_rate)
