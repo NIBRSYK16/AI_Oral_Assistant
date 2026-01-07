@@ -192,11 +192,10 @@ class TextToSpeech:
         import io
         
         # Piper输出WAV数据
-        # 注意：Piper的synthesize方法会自动设置WAV文件参数，不需要手动设置
         wav_buffer = io.BytesIO()
         with wave.open(wav_buffer, 'wb') as wav_file:
-            # 调用Piper合成（Piper会自动设置channels、sample_width、framerate等参数）
-            self._voice.synthesize(text, wav_file)
+            # 使用synthesize_wav方法，它会自动设置WAV格式参数
+            self._voice.synthesize_wav(text, wav_file)
         
         # 读取音频数据
         wav_buffer.seek(0)
