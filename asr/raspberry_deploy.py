@@ -270,6 +270,20 @@ class RaspberryPiAudioProcessor:
                     # 多通道：执行波束形成
                     enhanced = self.beamformer.delay_and_sum(chunk)
                 
+                # 2. 确保传入去噪的为浮点数（librosa/torch要求浮点输入），并归一化到 [-1, 1]
+                if not isinstance(enhanced, np.ndarray):
+                    enhanced = np.array(enhanced)
+
+                # 转为 float32
+                if np.issubdtype(enhanced.dtype, np.integer):
+                    try:
+                        max_val = np.iinfo(enhanced.dtype).max
+                    except Exception:
+                        max_val = 32767
+                    enhanced = enhanced.astype(np.float32) / float(max_val)
+                else:
+                    enhanced = enhanced.astype(np.float32)
+
                 # 2. 去噪
                 final = self.denoiser.denoise(enhanced, self.sample_rate)
                 

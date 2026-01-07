@@ -82,9 +82,9 @@ MODEL_CONFIG = {
 
 # 讯飞星火语音评测配置
 XUNFEI_CONFIG = {
-    'APPID': 'YOUR_APPID',
-    'APISecret': 'YOUR_API_SECRET', 
-    'APIKey': 'YOUR_API_KEY',
+    'APPID': '020a4aa7',
+    'APISecret': 'MjI5MjM0MTI2ZGJlMWY3MTU3ZjcwODEx', 
+    'APIKey': 'a5504a88c254edd71bd851db8c1ae78d',
     # 评测服务地址
     'HostUrl': 'wss://ise-api.xfyun.cn/v2/open-ise',
     'Sub': 'ise',
