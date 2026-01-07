@@ -12,6 +12,12 @@ from .score_calculator import ScoreCalculator
 from .feedback_generator import FeedbackGenerator
 from .config import LOG_CONFIG
 
+# 尝试导入讯飞评分器
+try:
+    from .xunfei_rater import XunfeiRater
+except ImportError:
+    XunfeiRater = None
+
 # 配置日志
 logging.basicConfig(
     level=getattr(logging, LOG_CONFIG["level"]),
@@ -60,8 +66,21 @@ class SpeechRater:
         self.score_calculator = ScoreCalculator()
         self.feedback_generator = FeedbackGenerator()
         
+        # 初始化讯飞评分器
+        if XunfeiRater:
+            self.xunfei_rater = XunfeiRater()
+        else:
+            self.xunfei_rater = None
+        
         logger.info("语音评分器初始化完成")
     
+    def score_with_xunfei(self, audio_path: str, text: str) -> Optional[Dict]:
+        """使用讯飞大模型进行评分"""
+        if not self.xunfei_rater:
+            logger.warning("讯飞评分器未初始化")
+            return None
+        return self.xunfei_rater.score(audio_path, text)
+
     def score(self, audio_path: str, text: str, 
               asr_confidence: Optional[float] = None,
               task_type: str = "independent") -> ScoreResult:

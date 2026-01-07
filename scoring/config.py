@@ -79,3 +79,16 @@ MODEL_CONFIG = {
     "lm_model_path": None,
 }
 
+
+# 讯飞星火语音评测配置
+XUNFEI_CONFIG = {
+    'APPID': 'YOUR_APPID',
+    'APISecret': 'YOUR_API_SECRET', 
+    'APIKey': 'YOUR_API_KEY',
+    # 评测服务地址
+    'HostUrl': 'wss://ise-api.xfyun.cn/v2/open-ise',
+    'Sub': 'ise',
+    'Ent': 'en_vip',
+    'Category': 'read_chapter',
+}
+
