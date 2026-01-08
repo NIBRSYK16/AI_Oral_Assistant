@@ -79,3 +79,22 @@ MODEL_CONFIG = {
     "lm_model_path": None,
 }
 
+
+# 讯飞星火语音评测配置
+XUNFEI_CONFIG = {
+    'APPID': '020a4aa7',
+    'APISecret': 'MjI5MjM0MTI2ZGJlMWY3MTU3ZjcwODEx', 
+    'APIKey': 'a5504a88c254edd71bd851db8c1ae78d',
+    # 评测服务地址
+    'HostUrl': 'wss://ise-api.xfyun.cn/v2/open-ise',
+    'Sub': 'ise',
+    'Ent': 'en_vip',
+    'Category': 'topic',
+}
+
+# 综合评分权重配置
+SCORING_WEIGHTS = {
+    "local_algorithm": 0.4,   # 本地算法权重
+    "large_model": 0.6,       # 大模型(讯飞)权重
+}
+

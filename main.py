@@ -391,13 +391,14 @@ class OralAssistant:
         logger.warning("ASR功能未实现，使用模拟文本")
         return "I think the most important quality for a friend is honesty. A good friend should be trustworthy and reliable."
     
-    def _score_response(self, audio_path: str, text: str) -> ScoreResult:
+    def _score_response(self, audio_path: str, text: str, question_text: str = None) -> ScoreResult:
         """
         评分
         
         Args:
             audio_path: 音频文件路径
             text: 识别文本
+            question_text: 题目文本(用于讯飞topic模式)
             
         Returns:
             评分结果
@@ -410,7 +411,8 @@ class OralAssistant:
                 audio_path=audio_path,
                 text=text,
                 asr_confidence=None,  # 如果ASR提供置信度，可以传入
-                task_type="independent"
+                task_type="independent",
+                reference_text=question_text
             )
             
             return result
@@ -487,7 +489,7 @@ class OralAssistant:
                 
                 # 5. 评分
                 try:
-                    result = self._score_response(audio_path, text)
+                    result = self._score_response(audio_path, text, question_text=question)
                     
                     # 6. 播放评价
                     self._present_feedback(result)

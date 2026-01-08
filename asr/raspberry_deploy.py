@@ -45,8 +45,8 @@ class RaspberryPiAudioProcessor:
             device='cpu'
         )
         
-        # 音频缓冲区
-        self.audio_buffer = queue.Queue(maxsize=100)
+        # 音频缓冲区 (使用无限队列以防止高采样率下缓冲区溢出)
+        self.audio_buffer = queue.Queue(maxsize=0)
         
         # 控制标志
         self.is_recording = False
@@ -248,20 +248,36 @@ class RaspberryPiAudioProcessor:
     def process_audio(self):
         """
         处理音频数据（在独立线程中运行）
-        执行波束形成和去噪处理
+        先收集原始音频，录音结束后再统一处理，以避免处理速度跟不上导致丢帧
         """
         self.is_processing = True
         
-        logger.info("开始实时处理音频...")
+        logger.info("开始收集音频数据...")
         
-        # 保存处理结果的缓冲区
-        output_buffer = []
+        # 原始音频缓冲区
+        raw_buffer = []
         
+        # 阶段1: 快速收集数据
         while self.is_recording or not self.audio_buffer.empty():
             try:
                 # 从队列获取数据
                 chunk = self.audio_buffer.get(timeout=0.5)
+                raw_buffer.append(chunk)
                 
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"收集音频时出错: {e}")
+                continue
+                
+        logger.info(f"音频收集完成，共收集 {len(raw_buffer)} 个数据块，开始后期处理...")
+
+        # 阶段2: 统一处理 (波束形成 + 去噪)
+        output_buffer = []
+        total_chunks = len(raw_buffer)
+        
+        for i, chunk in enumerate(raw_buffer):
+            try:
                 # 1. 波束形成（如果只有1通道，跳过波束形成）
                 if self.channels == 1:
                     # 单通道：直接使用，不需要波束形成
@@ -270,14 +286,30 @@ class RaspberryPiAudioProcessor:
                     # 多通道：执行波束形成
                     enhanced = self.beamformer.delay_and_sum(chunk)
                 
-                # 2. 去噪
+                # 2. 确保传入去噪的为浮点数（librosa/torch要求浮点输入），并归一化到 [-1, 1]
+                if not isinstance(enhanced, np.ndarray):
+                    enhanced = np.array(enhanced)
+
+                # 转为 float32
+                if np.issubdtype(enhanced.dtype, np.integer):
+                    try:
+                        max_val = np.iinfo(enhanced.dtype).max
+                    except Exception:
+                        max_val = 32767
+                    enhanced = enhanced.astype(np.float32) / float(max_val)
+                else:
+                    enhanced = enhanced.astype(np.float32)
+
+                # 3. 去噪
                 final = self.denoiser.denoise(enhanced, self.sample_rate)
                 
                 # 保存结果
                 output_buffer.append(final)
                 
-            except queue.Empty:
-                continue
+                # 简单的进度日志
+                if (i + 1) % 50 == 0:
+                    logger.info(f"正在处理: {i + 1}/{total_chunks}")
+                
             except Exception as e:
                 logger.error(f"处理音频时出错: {e}")
                 continue

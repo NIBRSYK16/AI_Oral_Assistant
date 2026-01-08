@@ -1,1 +1,11 @@
 /test
+
+# vscode
+.vscode/
+
+# python cache
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+*.html
