@@ -39,8 +39,9 @@ conda activate oral_assistant
 
 # 3. 安装Python依赖
 cd tts && pip install -r requirements.txt && cd ..
-cd asr && pip install numpy scipy soundfile librosa matplotlib pyaudio sounddevice && cd ..
-cd scoring && pip install numpy scipy librosa soundfile wordfreq nltk && cd ..
+cd se && pip install -r requirements.txt && cd ..
+cd asr && pip install -r requirements.txt && cd ..
+cd scoring && pip install -r requirements.txt && cd ..
 
 # 4. 下载TTS模型
 cd tts && python download_models.py en_US-amy-medium && cd ..
@@ -93,14 +94,14 @@ python main.py --no-wake-word
 
 #### 唤醒词检测器
 
-系统使用轻量级的唤醒词检测器（`asr/wake_word_detector.py`）实现持续监听。
+系统使用轻量级的唤醒词检测器（`se/wake_word_detector.py`）实现持续监听。
 
 **当前实现**：
 - 基于能量检测的简单唤醒词识别
 - 支持关键词：`"assistant"`, `"voice assistant"`, `"语音助手"`
 
 **未来改进**（可选）：
-- 集成Vosk或Whisper进行更准确的语音识别
+- 集成ASR模块进行更准确的唤醒词识别
 - 支持自定义唤醒词训练
 
 #### 唤醒流程
@@ -398,10 +399,14 @@ AI_Oral_Assistant/
 │   ├── tts_module.py  # TTS核心模块
 │   ├── config.py      # 配置文件
 │   └── models/        # TTS模型目录
-├── asr/               # 语音识别模块
-│   ├── raspberry_deploy.py  # 树莓派部署
-│   ├── models/        # 音频处理模型
+├── se/                # 语音增强模块 (Speech Enhancement)
+│   ├── raspberry_deploy.py  # 树莓派部署（录音和音频增强）
+│   ├── models/        # 音频处理模型（波束形成、去噪）
 │   └── utils/         # 工具函数
+├── asr/               # 语音识别模块 (ASR)
+│   ├── asr_module.py  # ASR核心模块（基于Vosk）
+│   ├── config.py      # ASR配置
+│   └── models/        # Vosk模型目录
 ├── scoring/           # 评分模块
 │   ├── speech_rater.py      # 评分主类
 │   ├── audio_analyzer.py    # 音频分析
@@ -426,8 +431,9 @@ AI_Oral_Assistant/
 
 ### 音频配置
 
-- 识别模块：16kHz，6通道（可在 `asr/config.py` 中修改）
-- 合成模块：22.05kHz，单声道
+- 语音增强模块（SE）：16kHz，单通道或多通道（可在 `se/config.py` 中修改）
+- 语音识别模块（ASR）：16kHz，单声道（Vosk模型要求）
+- 合成模块（TTS）：22.05kHz，单声道
 
 ## 常见问题
 
@@ -465,11 +471,26 @@ sudo usermod -a -G audio $USER
 # 重新登录后生效
 ```
 
-### Q5: 某些包安装失败
+### Q5: ASR模型未下载
+
+如果ASR识别失败，需要下载Vosk模型：
+
+```bash
+# 创建模型目录
+mkdir -p asr/models
+
+# 下载轻量级模型（推荐，约40MB）
+cd asr/models
+wget https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip vosk-model-small-en-us-0.15.zip
+cd ../..
+```
+
+### Q6: 某些包安装失败
 
 以下包是可选的，不影响基本功能：
 - `spacy` - 评分功能会使用简化方法
-- `torch` - ASR模块不使用（树莓派不支持）
+- `torch` - 语音增强模块可选（树莓派上建议不使用）
 
 ## 技术说明
 
@@ -480,7 +501,8 @@ sudo usermod -a -G audio $USER
 ### 模型和算法
 
 - **TTS模块**：使用Piper TTS预训练模型
-- **ASR模块**：主要使用纯算法（波束形成、谱减法）
+- **SE模块（语音增强）**：波束形成（DSB/MVDR）+ 谱减法去噪
+- **ASR模块（语音识别）**：基于Vosk离线语音识别引擎
 - **评分模块**：大部分功能使用纯算法，可选spaCy增强
 
 ### 性能优化
@@ -491,10 +513,11 @@ sudo usermod -a -G audio $USER
 
 ## 开发计划
 
-- [ ] 集成ASR功能（whisper或vosk）
+- [x] 集成ASR功能（基于Vosk）
 - [ ] 支持从Word文档读取题库
 - [ ] 添加历史记录功能
 - [ ] 添加可视化界面
+- [ ] 优化ASR识别准确率（使用更大模型）
 
 ## 参考资料
 

@@ -1,5 +1,5 @@
 """
-语音识别模块 - 树莓派部署
+语音增强模块 - 树莓派部署 (Speech Enhancement)
 负责录音、音频增强（波束形成+去噪）和音频保存
 """
 import numpy as np

@@ -1,193 +1,164 @@
-# 语音识别模块
+# 语音识别模块 (ASR)
 
-基于树莓派的语音识别和音频增强模块，负责录音、音频增强（波束形成+去噪）和音频保存。
+基于Vosk的离线语音识别模块，适合树莓派4环境。
 
 ## 功能特性
 
-- 多通道音频录音（支持6通道麦克风阵列）
-- 波束形成（Beamforming）：增强目标方向的声音
-- 音频去噪：降低背景噪声
-- 实时音频处理
-- 适配树莓派环境
-
-## 模块结构
-
-```
-识别/
-├── config.py              # 配置文件
-├── raspberry_deploy.py    # 主模块（录音和处理）
-├── local_test.py          # 本地测试脚本
-├── models/                # 模型目录
-│   ├── beamformer.py     # 波束形成器
-│   └── denoiser.py       # 去噪器
-├── utils/                 # 工具模块
-│   ├── audio_utils.py    # 音频工具函数
-│   └── device_utils.py   # 设备检测工具
-├── requirements.txt      # Python依赖
-└── README.md             # 本文档
-```
+- **离线识别**：完全离线，无需网络连接
+- **轻量级**：使用vosk-model-small-en-us-0.15（约40MB），适合树莓派4
+- **实时识别**：支持实时音频流识别
+- **词级时间戳**：可选返回词级时间戳信息
+- **高准确率**：针对英语语音优化
 
 ## 安装依赖
 
 ```bash
-# 安装系统依赖（树莓派）
-sudo apt-get update
-sudo apt-get install -y portaudio19-dev python3-pyaudio
-
 # 安装Python依赖
 pip install -r requirements.txt
 ```
+
+## 下载Vosk模型
+
+Vosk需要下载预训练模型。推荐使用轻量级模型（适合树莓派4）：
+
+```bash
+# 创建模型目录
+mkdir -p asr/models
+
+# 下载模型（约40MB）
+cd asr/models
+wget https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip vosk-model-small-en-us-0.15.zip
+mv vosk-model-small-en-us-0.15 vosk-model-small-en-us-0.15
+cd ../..
+```
+
+或者访问 [Vosk模型页面](https://alphacephei.com/vosk/models) 手动下载。
+
+**注意**：树莓派4推荐使用 `vosk-model-small-en-us-0.15`，如果需要更高精度可以使用 `vosk-model-en-us-0.22`（约1.8GB，但识别速度会较慢）。
 
 ## 使用方法
 
 ### 基本使用
 
 ```python
-from raspberry_deploy import RaspberryPiAudioProcessor
+from asr.asr_module import SpeechRecognizer
 
-# 创建处理器实例
-processor = RaspberryPiAudioProcessor()
+# 初始化识别器
+recognizer = SpeechRecognizer()
 
-# 列出可用音频设备
-devices = processor.list_audio_devices()
+# 识别音频文件
+text = recognizer.recognize_text("audio.wav")
+print(f"识别结果: {text}")
 
-# 开始录音（录音10秒）
-processor.start_recording(duration=10)
-
-# 或者手动停止录音
-# processor.start_recording()
-# ... 等待用户操作 ...
-# processor.stop_recording(stream)
-
-# 处理后的音频保存在 raspberry_output.wav
-# 清理资源
-processor.cleanup()
+# 获取文本和置信度
+text, confidence = recognizer.recognize_with_confidence("audio.wav")
+print(f"文本: {text}, 置信度: {confidence}")
 ```
 
-### 命令行测试
+### 获取词级时间戳
 
-```bash
-# 本地测试（使用测试音频文件）
-python local_test.py
+```python
+result = recognizer.recognize_file("audio.wav", return_words=True)
+print(f"文本: {result['text']}")
+for word in result['words']:
+    print(f"{word['word']}: {word['start']:.2f}s - {word['end']:.2f}s")
+```
 
-# 树莓派部署测试（实际录音）
-python raspberry_deploy.py
+### 自定义模型路径
+
+```python
+recognizer = SpeechRecognizer(model_path="/path/to/vosk-model")
 ```
 
 ## 配置说明
 
 在 `config.py` 中可以配置：
 
-- **音频参数**：采样率、通道数、块大小
-- **波束形成参数**：麦克风位置、目标方向、算法类型
-- **去噪参数**：是否使用预训练模型
+- **VOSK_MODEL_PATH**: Vosk模型路径
+- **SAMPLE_RATE**: 音频采样率（必须与模型匹配，通常为16000）
+- **MAX_ALTERNATIVES**: 最大候选结果数
+- **WORDS**: 是否返回词级时间戳
 
-### 麦克风阵列配置
+## 音频格式要求
 
-默认配置为6通道环形麦克风阵列，位置在 `Config.MIC_POSITIONS` 中定义。如果使用不同的麦克风配置，需要修改此参数。
+- **格式**: WAV
+- **采样率**: 16000 Hz（推荐）
+- **声道**: 单声道（Mono）
+- **位深**: 16位
 
-## 模块说明
-
-### RaspberryPiAudioProcessor
-
-主处理类，提供以下功能：
-
-- `list_audio_devices()`: 列出可用音频设备
-- `find_6ch_device()`: 查找6通道麦克风设备
-- `start_recording(duration)`: 开始录音
-- `stop_recording(stream)`: 停止录音
-- `process_audio()`: 处理音频（波束形成+去噪）
-- `save_audio(audio, filename)`: 保存音频文件
-- `cleanup()`: 清理资源
-
-### Beamformer
-
-波束形成器，支持以下算法：
-
-- DSB (Delay and Sum Beamforming): 延迟求和波束形成
-- MVDR (Minimum Variance Distortionless Response): 最小方差无失真响应
-
-### Denoiser
-
-去噪器，支持：
-
-- 谱减法（轻量级，适合树莓派）
-- 神经网络去噪（需要预训练模型）
-
-## 工作流程
-
-1. **录音**：从麦克风阵列采集多通道音频
-2. **波束形成**：增强目标方向的声音，抑制其他方向的噪声
-3. **去噪**：进一步降低背景噪声
-4. **保存**：将处理后的音频保存为WAV文件
-
-## 注意事项
-
-1. **ASR功能**：本模块目前只负责音频增强，不包含语音识别（ASR）功能。ASR功能需要单独集成（如whisper、vosk等）。
-2. **音频设备**：需要6通道麦克风阵列。如果只有单通道或双通道麦克风，可以修改配置使用单通道模式。
-3. **性能**：在树莓派上运行时，建议使用轻量级的去噪算法（谱减法）而不是神经网络模型。
-4. **输出格式**：处理后的音频为16kHz单声道WAV格式，可直接用于ASR识别。
+**注意**：音频必须与模型匹配。如果音频采样率不是16000Hz，需要先进行重采样。
 
 ## 与主程序集成
 
 在主程序中使用：
 
 ```python
-from 识别.raspberry_deploy import RaspberryPiAudioProcessor
+from asr.asr_module import SpeechRecognizer
 
-processor = RaspberryPiAudioProcessor()
-processor.start_recording(duration=45)  # 录音45秒
+# 初始化
+recognizer = SpeechRecognizer()
 
-# 等待处理完成
-while processor.is_processing:
-    time.sleep(0.1)
-
-# 获取处理后的音频路径
-audio_path = processor.output_audio_path
+# 识别增强后的音频
+audio_path = "raspberry_output.wav"  # 来自语音增强模块
+text = recognizer.recognize_text(audio_path)
 ```
+
+## 性能优化
+
+对于树莓派4，建议：
+
+1. **使用轻量级模型**：`vosk-model-small-en-us-0.15`（约40MB）
+2. **限制音频长度**：避免处理过长的音频（建议<60秒）
+3. **预处理音频**：使用语音增强模块先处理音频，提高识别准确率
 
 ## 常见问题
 
-### Q1: 找不到6通道麦克风设备
+### Q1: 模型加载失败
 
-如果只有单通道或双通道麦克风，可以修改 `config.py` 中的 `CHANNELS` 参数。
+确保模型路径正确，并且模型文件完整。检查 `asr/models/vosk-model-small-en-us-0.15/` 目录是否存在。
 
-### Q2: 录音没有声音
+### Q2: 识别结果为空
 
-检查：
+- 检查音频格式是否正确（16kHz单声道WAV）
+- 检查音频是否包含有效语音
+- 尝试使用更高质量的模型
 
-- 麦克风是否正确连接
-- 音频设备权限（可能需要sudo）
-- 使用 `aplay -l` 检查设备列表
+### Q3: 识别速度慢
 
-### Q3: 处理速度慢
-
-- 使用谱减法而不是神经网络去噪
-- 减少音频块大小
+- 使用轻量级模型（vosk-model-small-en-us-0.15）
+- 减少音频长度
 - 关闭不必要的后台进程
+
+### Q4: 识别准确率低
+
+- 确保音频质量良好（使用语音增强模块）
+- 减少背景噪声
+- 使用更高质量的模型（但会降低速度）
 
 ## 扩展开发
 
-### 添加ASR功能
+### 支持其他语言
 
-可以在 `raspberry_deploy.py` 中添加ASR识别：
+下载对应语言的Vosk模型，例如：
+- 中文：vosk-model-cn-0.22
+- 其他语言：访问 [Vosk模型页面](https://alphacephei.com/vosk/models)
+
+### 实时识别
+
+可以扩展支持实时音频流识别：
 
 ```python
-def recognize_speech(self, audio_path):
-    """语音识别"""
-    # 集成whisper或vosk
-    import whisper
-    model = whisper.load_model("base")
-    result = model.transcribe(audio_path)
-    return result["text"]
+# 实时识别示例（需要扩展）
+recognizer.start_stream()
+while True:
+    text = recognizer.get_partial_result()
+    if text:
+        print(text)
 ```
-
-### 修改波束形成算法
-
-在 `models/beamformer.py` 中添加新的算法实现。
 
 ## 参考资料
 
-- PyAudio文档: https://people.csail.mit.edu/hubert/pyaudio/
-- 波束形成算法: https://en.wikipedia.org/wiki/Beamforming
-- 音频去噪: https://en.wikipedia.org/wiki/Noise_reduction
+- Vosk官方文档: https://alphacephei.com/vosk/
+- Vosk GitHub: https://github.com/alphacep/vosk-api
+- Vosk模型下载: https://alphacephei.com/vosk/models
