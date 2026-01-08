@@ -1,8 +1,7 @@
 """
-语音识别模块
-负责录音、音频增强和音频保存
+语音识别模块 (ASR - Automatic Speech Recognition)
+负责将音频转换为文本
 """
-from .raspberry_deploy import RaspberryPiAudioProcessor
+from .asr_module import SpeechRecognizer
 
-__all__ = ["RaspberryPiAudioProcessor"]
-
+__all__ = ["SpeechRecognizer"]

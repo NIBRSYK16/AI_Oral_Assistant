@@ -1,7 +1,8 @@
 """
-语音识别模块配置文件
-适配树莓派环境的ASR配置
+语音增强模块配置文件 (Speech Enhancement)
+适配树莓派环境的音频处理配置
 """
+import numpy as np
 import os
 
 # 项目根目录
@@ -12,7 +13,7 @@ class Config:
     # 音频参数
     SAMPLE_RATE = 16000
     CHANNELS = 1  # 默认1通道，适配USB麦克风（如果有多通道设备会自动检测）
-    CHUNK_SIZE = 4096  # 增大缓冲区大小以减少回调频率，防止丢帧(原为1024)
+    CHUNK_SIZE = 1024
     
     # 波束形成参数
     BEAMFORMER_TYPE = 'MVDR'  # 可选: 'DSB'(延迟求和), 'MVDR', 'GSC'
@@ -37,4 +38,4 @@ class Config:
     # 日志配置
     LOG_LEVEL = "INFO"
     LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    LOG_FILE = os.path.join(BASE_DIR, "logs", "asr.log")
+    LOG_FILE = os.path.join(BASE_DIR, "logs", "recognition.log")

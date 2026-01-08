@@ -70,10 +70,15 @@
 - 调用Piper TTS引擎进行语音合成
 - 音频流式播放
 
-**ASR模块（asr/）**
+**SE模块（se/）- 语音增强**
 - 多通道音频采集
 - 音频增强（波束形成、去噪）
-- 音频保存（ASR识别功能待集成）
+- 音频保存
+
+**ASR模块（asr/）- 语音识别**
+- 基于Vosk的离线语音识别
+- 将音频转换为文本
+- 提供识别置信度
 
 **评分模块（scoring/）**
 - 音频特征提取（VAD、重音、静音检测）
@@ -87,9 +92,11 @@
    │
    ├─→ [TTS模块] → 题目语音播放
    │
-   ├─→ [ASR模块] → 录音 → 音频增强 → 保存音频文件
+   ├─→ [SE模块] → 录音 → 音频增强 → 保存音频文件
    │
-   └─→ [评分模块] ← 音频文件 + 识别文本
+   ├─→ [ASR模块] ← 音频文件 → 识别文本 + 置信度
+   │
+   └─→ [评分模块] ← 音频文件 + 识别文本 + 置信度
                     │
                     └─→ 评分结果 + 反馈
 ```
@@ -125,10 +132,11 @@ def __init__(self):
 
 **初始化顺序**：
 1. 创建TTS模块实例，自动加载Piper TTS模型
-2. 创建ASR模块实例，初始化音频设备和增强模型
-3. 创建评分模块实例，加载评分器组件
-4. 从 `question.md` 文件加载题库
-5. 设置录音文件保存路径
+2. 创建SE模块实例，初始化音频设备和增强模型
+3. 创建ASR模块实例，加载Vosk模型
+4. 创建评分模块实例，加载评分器组件
+5. 从 `question.md` 文件加载题库
+6. 设置录音文件保存路径
 
 ### 3.2 主运行流程
 
@@ -185,10 +193,11 @@ def run(self):
 1. **唤醒阶段**：等待用户输入 `start` 或唤醒词
 2. **出题阶段**：随机选择题目，通过TTS模块播放
 3. **准备阶段**：15秒倒计时，给用户准备时间
-4. **录音阶段**：45秒自动录音，ASR模块进行音频增强
-5. **评分阶段**：评分模块分析音频和文本，生成评分结果
-6. **反馈阶段**：通过TTS播放英文评价
-7. **循环判断**：询问用户是否继续练习
+4. **录音阶段**：45秒自动录音，SE模块进行音频增强
+5. **识别阶段**：ASR模块将增强后的音频转换为文本
+6. **评分阶段**：评分模块分析音频、文本和置信度，生成评分结果
+7. **反馈阶段**：通过TTS播放英文评价
+8. **循环判断**：询问用户是否继续练习
 
 ---
 
@@ -405,18 +414,18 @@ def _synthesize_sentence(self, sentence: str) -> Optional[np.ndarray]:
 
 ---
 
-### 4.2 语音识别模块（ASR）
+### 4.2 语音增强模块（SE）
 
 #### 4.2.1 模块概述
 
-ASR模块负责多通道音频采集、音频增强和音频保存。该模块主要实现音频预处理功能，包括波束形成和去噪，为后续的语音识别提供高质量的音频输入。目前ASR识别功能待集成（可集成whisper或vosk等离线模型）。
+SE（Speech Enhancement）模块负责多通道音频采集、音频增强和音频保存。该模块主要实现音频预处理功能，包括波束形成和去噪，为后续的语音识别提供高质量的音频输入。
 
 #### 4.2.2 核心类：RaspberryPiAudioProcessor
 
-`RaspberryPiAudioProcessor` 类是ASR模块的核心，位于 `asr/raspberry_deploy.py`：
+`RaspberryPiAudioProcessor` 类是SE模块的核心，位于 `se/raspberry_deploy.py`：
 
 ```python
-# asr/raspberry_deploy.py 第22-58行
+# se/raspberry_deploy.py 第22-58行
 class RaspberryPiAudioProcessor:
     """树莓派音频处理类"""
     
@@ -468,7 +477,7 @@ class RaspberryPiAudioProcessor:
 录音采用回调函数模式，支持实时处理：
 
 ```python
-# asr/raspberry_deploy.py 第112-150行
+# se/raspberry_deploy.py 第112-150行
 def start_recording(self, device_index=None, duration=None):
     """
     开始录音
@@ -513,7 +522,7 @@ def start_recording(self, device_index=None, duration=None):
 **录音回调函数**：
 
 ```python
-# asr/raspberry_deploy.py 第99-110行
+# se/raspberry_deploy.py 第99-110行
 def record_callback(self, in_data, frame_count, time_info, status):
     """录音回调函数"""
     if self.is_recording:
@@ -594,7 +603,7 @@ def process_audio(self):
 波束形成用于增强目标方向的声音，本项目实现了延迟求和（DSB）算法：
 
 ```python
-# asr/models/beamformer.py 第59-97行
+# se/models/beamformer.py 第59-97行
 def delay_and_sum(self, multi_channel_audio):
     """
     延迟求和波束形成
@@ -647,7 +656,7 @@ def delay_and_sum(self, multi_channel_audio):
 去噪模块支持两种方法：谱减法（轻量级）和神经网络去噪（可选）：
 
 ```python
-# asr/models/denoiser.py 第73-110行（简化版）
+# se/models/denoiser.py 第73-110行（简化版）
 def _spectral_subtraction(self, audio, sr=16000, noise_reduction=0.5):
     """
     经典谱减法（使用librosa，不依赖torch）
@@ -697,18 +706,221 @@ def _spectral_subtraction(self, audio, sr=16000, noise_reduction=0.5):
 
 ---
 
-### 4.3 评分模块（Scoring）
+### 4.3 语音识别模块（ASR）
+
+#### 4.3.1 模块概述
+
+ASR（Automatic Speech Recognition）模块负责将音频转换为文本。本系统使用Vosk离线语音识别引擎，完全离线运行，适合树莓派环境。Vosk是一个轻量级的语音识别库，支持多种语言和模型大小。
+
+#### 4.3.2 核心类：SpeechRecognizer
+
+`SpeechRecognizer` 类是ASR模块的核心，位于 `asr/asr_module.py`：
+
+```python
+# asr/asr_module.py 第19-58行
+class SpeechRecognizer:
+    """
+    语音识别器
+    使用Vosk进行离线语音识别
+    """
+    
+    def __init__(self, model_path: Optional[str] = None, sample_rate: int = 16000):
+        """
+        初始化语音识别器
+        
+        Args:
+            model_path: Vosk模型路径，None则使用默认路径
+            sample_rate: 音频采样率，必须与模型匹配（通常为16000）
+        """
+        self.sample_rate = sample_rate
+        self.model = None
+        self.recognizer = None
+        
+        if not VOSK_AVAILABLE:
+            logger.error("Vosk未安装，无法初始化语音识别器")
+            raise ImportError("请先安装vosk: pip install vosk")
+        
+        # 确定模型路径
+        if model_path is None:
+            from .config import ASRConfig
+            model_path = ASRConfig.VOSK_MODEL_PATH
+        
+        # 检查模型是否存在
+        if not os.path.exists(model_path):
+            logger.error(f"Vosk模型不存在: {model_path}")
+            raise FileNotFoundError(f"Vosk模型不存在: {model_path}")
+        
+        # 加载模型
+        try:
+            logger.info(f"加载Vosk模型: {model_path}")
+            self.model = vosk.Model(model_path)
+            self.recognizer = vosk.KaldiRecognizer(self.model, self.sample_rate)
+            self.recognizer.SetWords(True)  # 启用词级时间戳
+            logger.info("Vosk模型加载成功")
+        except Exception as e:
+            logger.error(f"加载Vosk模型失败: {e}")
+            raise
+```
+
+**关键组件说明**：
+
+- **model**：Vosk模型对象，包含预训练的声学模型和语言模型
+- **recognizer**：KaldiRecognizer对象，执行实际的识别任务
+- **sample_rate**：音频采样率，必须与模型匹配（通常为16000Hz）
+
+#### 4.3.3 模型加载
+
+Vosk需要下载预训练模型。对于树莓派4，推荐使用轻量级模型：
+
+- **vosk-model-small-en-us-0.15**：约40MB，适合树莓派4，识别速度较快
+- **vosk-model-en-us-0.22**：约1.8GB，识别准确率更高，但速度较慢
+
+模型下载后解压到 `asr/models/` 目录。
+
+#### 4.3.4 语音识别流程
+
+`recognize_file` 方法是ASR模块的核心接口：
+
+```python
+# asr/asr_module.py 第60-120行（简化版）
+def recognize_file(self, audio_file: str, return_words: bool = False) -> Dict:
+    """
+    识别音频文件
+    
+    Args:
+        audio_file: 音频文件路径（WAV格式，16kHz单声道）
+        return_words: 是否返回词级时间戳
+        
+    Returns:
+        识别结果字典，包含:
+        - text: 识别的文本
+        - confidence: 置信度（如果可用）
+        - words: 词级时间戳列表（如果return_words=True）
+    """
+    # 打开WAV文件
+    wf = wave.open(audio_file, "rb")
+    
+    # 检查音频格式
+    if wf.getnchannels() != 1:
+        logger.warning(f"音频不是单声道，当前通道数: {wf.getnchannels()}")
+    
+    if wf.getframerate() != self.sample_rate:
+        logger.warning(f"音频采样率不匹配，期望: {self.sample_rate}, 实际: {wf.getframerate()}")
+    
+    # 读取音频数据并识别
+    results = []
+    while True:
+        data = wf.readframes(4000)  # 每次读取4000帧
+        if len(data) == 0:
+            break
+        
+        # 识别
+        if self.recognizer.AcceptWaveform(data):
+            result = json.loads(self.recognizer.Result())
+            if 'text' in result and result['text']:
+                results.append(result)
+        else:
+            # 部分结果
+            partial = json.loads(self.recognizer.PartialResult())
+            if 'partial' in partial and partial['partial']:
+                logger.debug(f"部分识别: {partial['partial']}")
+    
+    # 获取最终结果
+    final_result = json.loads(self.recognizer.FinalResult())
+    
+    wf.close()
+    
+    # 合并所有结果
+    full_text = " ".join([r.get('text', '') for r in results if r.get('text')])
+    if final_result.get('text'):
+        full_text = full_text + " " + final_result.get('text', '')
+    full_text = full_text.strip()
+    
+    # 构建返回结果
+    result_dict = {
+        'text': full_text,
+        'confidence': final_result.get('confidence', None)
+    }
+    
+    # 如果需要词级时间戳
+    if return_words:
+        words = []
+        for r in results:
+            if 'result' in r:
+                words.extend(r['result'])
+        if 'result' in final_result:
+            words.extend(final_result['result'])
+        result_dict['words'] = words
+    
+    return result_dict
+```
+
+**识别流程**：
+1. 打开WAV文件，检查音频格式
+2. 分块读取音频数据（每次4000帧）
+3. 对每块数据调用 `AcceptWaveform()` 进行识别
+4. 收集所有识别结果
+5. 调用 `FinalResult()` 获取最终结果
+6. 合并所有结果文本
+7. 返回文本、置信度和可选的词级时间戳
+
+#### 4.3.5 在主程序中的集成
+
+在主程序 `main.py` 中，ASR模块的集成方式：
+
+```python
+# main.py 第49-55行
+# 初始化ASR模块（语音识别）
+try:
+    self.asr_recognizer = SpeechRecognizer()
+    logger.info("ASR模块初始化成功")
+except Exception as e:
+    logger.warning(f"ASR模块初始化失败: {e}，将使用模拟文本")
+    self.asr_recognizer = None
+
+# main.py 第376-395行
+def _recognize_speech(self, audio_path: str) -> tuple:
+    """
+    语音识别
+    
+    Args:
+        audio_path: 音频文件路径
+        
+    Returns:
+        (recognized_text, confidence) 元组
+    """
+    if self.asr_recognizer is None or not self.asr_recognizer.is_available():
+        logger.warning("ASR模块不可用，使用模拟文本")
+        return "模拟文本", None
+    
+    try:
+        # 使用ASR模块进行识别
+        text, confidence = self.asr_recognizer.recognize_with_confidence(audio_path)
+        return text, confidence
+    except Exception as e:
+        logger.error(f"ASR识别失败: {e}")
+        return "模拟文本", None
+```
+
+**集成要点**：
+- ASR模块初始化失败时，系统会回退到模拟文本模式
+- 识别结果包含文本和置信度
+- 置信度会传递给评分模块，用于计算发音质量
+
+---
+
+### 4.4 评分模块（Scoring）
 
 #### 4.3.1 模块概述
 
 评分模块基于TOEFL SpeechRater评分准则，对用户的语音回答进行多维度评分。评分分为两部分：发音评分（Delivery）和内容评分（Language Use），最终生成综合分数和中英文评价。
 
-#### 4.3.2 评分流程
+#### 4.4.2 评分流程
 
 评分模块的主入口是 `SpeechRater.score()` 方法：
 
 ```python
-# scoring/speech_rater.py 第65-120行（简化版）
+# scoring/speech_rater.py 第84-120行（简化版）
 def score(self, audio_path: str, text: str, 
           asr_confidence: Optional[float] = None,
           task_type: str = "independent") -> ScoreResult:
@@ -774,7 +986,7 @@ def score(self, audio_path: str, text: str,
 5. 加权求和得到最终分数（0-4分）
 6. 根据分数和特征生成中英文评价
 
-#### 4.3.3 音频分析器
+#### 4.4.3 音频分析器
 
 `AudioAnalyzer` 负责从音频中提取各种特征：
 
@@ -835,7 +1047,7 @@ def detect_speech_segments(self, audio: np.ndarray) -> List[Tuple[float, float]]
 2. 使用自适应阈值（平均能量的10%）判断语音/非语音
 3. 合并相邻的语音段，过滤过短的段
 
-#### 4.3.4 发音评分器
+#### 4.4.4 发音评分器
 
 `DeliveryScorer` 计算12个发音相关指标：
 
@@ -916,7 +1128,7 @@ def calculate_all_features(self, audio_path: str, text: str,
 | conftimeavg | ASR置信度 | 语音识别的平均置信度 |
 | L6 | 发音质量 | 综合多个特征的评分 |
 
-#### 4.3.5 内容评分器
+#### 4.4.5 内容评分器
 
 `LanguageScorer` 计算6个内容相关指标：
 
@@ -974,7 +1186,7 @@ def calculate_all_features(self, text: str, audio_duration: float,
 | lmscore | 语言模型分数 | 语法正确性评分 |
 | cvamax | 单词数对比 | 实际单词数与目标单词数的比值 |
 
-#### 4.3.6 分数计算
+#### 4.4.6 分数计算
 
 `ScoreCalculator` 负责将特征值转换为分数：
 
@@ -1010,7 +1222,7 @@ def calculate_final_score(self, delivery_score: float, language_score: float) ->
 3. 缩放到0-4分制
 4. 限制在有效范围内
 
-#### 4.3.7 评价生成
+#### 4.4.7 评价生成
 
 `FeedbackGenerator` 根据评分结果生成中英文评价：
 
@@ -1277,14 +1489,14 @@ def split_sentences(self, text: str) -> List[str]:
 2. 检查句子长度，超过阈值则进一步分割
 3. 优先按逗号分割，其次按空格分割
 
-### 5.3 ASR模块关键实现
+### 5.3 SE模块关键实现
 
 #### 5.3.1 延迟计算
 
 波束形成需要计算各麦克风相对于参考点的时延：
 
 ```python
-# asr/models/beamformer.py 第34-57行
+# se/models/beamformer.py 第34-57行
 def _calculate_delays(self):
     """计算各麦克风相对于参考点的延迟"""
     # 假设声源在远场
@@ -1320,10 +1532,10 @@ def _calculate_delays(self):
 
 #### 5.3.2 实时音频处理
 
-ASR模块使用队列和线程实现实时处理：
+SE模块使用队列和线程实现实时处理：
 
 ```python
-# asr/raspberry_deploy.py 第165-204行
+# se/raspberry_deploy.py 第165-204行
 def process_audio(self):
     """
     处理音频数据（在独立线程中运行）
@@ -1372,7 +1584,58 @@ def process_audio(self):
 - 异常处理确保稳定性
 - 录音结束后拼接所有音频块
 
-### 5.4 评分模块关键实现
+### 5.4 ASR模块关键实现
+
+#### 5.4.1 音频格式检查
+
+ASR模块在识别前会检查音频格式：
+
+```python
+# asr/asr_module.py 第60-80行（简化版）
+def recognize_file(self, audio_file: str, return_words: bool = False) -> Dict:
+    # 打开WAV文件
+    wf = wave.open(audio_file, "rb")
+    
+    # 检查音频格式
+    if wf.getnchannels() != 1:
+        logger.warning(f"音频不是单声道，当前通道数: {wf.getnchannels()}")
+    
+    if wf.getframerate() != self.sample_rate:
+        logger.warning(f"音频采样率不匹配，期望: {self.sample_rate}, 实际: {wf.getframerate()}")
+```
+
+**格式要求**：
+- 必须为单声道（Mono）
+- 采样率必须为16000Hz（Vosk模型要求）
+- 格式为WAV（16位PCM）
+
+#### 5.4.2 分块识别
+
+Vosk支持分块识别，适合处理长音频：
+
+```python
+# asr/asr_module.py 第85-105行（简化版）
+while True:
+    data = wf.readframes(4000)  # 每次读取4000帧
+    if len(data) == 0:
+        break
+    
+    # 识别
+    if self.recognizer.AcceptWaveform(data):
+        result = json.loads(self.recognizer.Result())
+        if 'text' in result and result['text']:
+            results.append(result)
+    else:
+        # 部分结果
+        partial = json.loads(self.recognizer.PartialResult())
+```
+
+**分块策略**：
+- 每次读取4000帧（约0.25秒的音频）
+- `AcceptWaveform()` 返回True时，表示识别到一个完整的结果
+- `PartialResult()` 返回部分识别结果，用于实时显示
+
+### 5.5 评分模块关键实现
 
 #### 5.4.1 特征归一化
 
@@ -1527,12 +1790,12 @@ TTS_CONFIG = {
 - `max_sentence_length`：超过此长度的句子会被强制分割
 - `sentence_pause`：句子之间的停顿时间
 
-### 6.2 ASR模块配置
+### 6.2 SE模块配置
 
-ASR模块的配置文件位于 `asr/config.py`：
+SE模块的配置文件位于 `se/config.py`：
 
 ```python
-# asr/config.py 第12-41行
+# se/config.py 第12-41行
 class Config:
     # 音频参数
     SAMPLE_RATE = 16000
@@ -1567,7 +1830,39 @@ class Config:
 - `MIC_POSITIONS`：麦克风位置数组，需要根据实际硬件调整
 - `USE_PRETRAINED`：是否使用预训练去噪模型（树莓派上建议False）
 
-### 6.3 评分模块配置
+### 6.3 ASR模块配置
+
+ASR模块的配置文件位于 `asr/config.py`：
+
+```python
+# asr/config.py 第12-30行
+class ASRConfig:
+    """ASR配置类"""
+    
+    # 音频参数（必须与语音增强模块一致）
+    SAMPLE_RATE = 16000  # Vosk推荐16kHz
+    CHANNELS = 1  # 单声道
+    
+    # Vosk模型配置
+    # 树莓派4推荐使用vosk-model-small-en-us-0.15（约40MB）
+    VOSK_MODEL_PATH = os.path.join(BASE_DIR, "models", "vosk-model-small-en-us-0.15")
+    VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+    
+    # 如果模型不存在，是否自动下载
+    AUTO_DOWNLOAD_MODEL = False  # 树莓派上建议手动下载
+    
+    # 识别参数
+    MAX_ALTERNATIVES = 3  # 最大候选结果数
+    WORDS = True  # 是否返回词级时间戳
+    PARTIAL_WORDS = False  # 是否返回部分词
+```
+
+**关键配置项说明**：
+- `SAMPLE_RATE`：音频采样率，必须为16000Hz（Vosk模型要求）
+- `VOSK_MODEL_PATH`：Vosk模型路径，需要手动下载模型
+- `WORDS`：是否返回词级时间戳，用于详细分析
+
+### 6.4 评分模块配置
 
 评分模块的配置文件位于 `scoring/config.py`：
 
@@ -1613,16 +1908,18 @@ SCORE_CONFIG = {
 - 可以根据实际需求调整权重，例如更重视发音或更重视内容
 - `delivery_weight` 和 `language_weight` 控制发音和内容的相对重要性
 
-### 6.4 配置调整建议
+### 6.5 配置调整建议
 
 **性能优化**：
 - 树莓派上建议使用低质量TTS模型（`amy_low`）以提高速度
-- ASR模块的 `USE_PRETRAINED` 设为False，使用轻量级谱减法
+- SE模块的 `USE_PRETRAINED` 设为False，使用轻量级谱减法
+- ASR模块使用轻量级模型（`vosk-model-small-en-us-0.15`）
 - 减少评分模块的VAD帧长度，降低计算量
 
 **准确性优化**：
 - 使用高质量TTS模型（`amy_medium` 或 `ryan_medium`）
 - 调整波束形成的 `LOOK_DIRECTION` 以匹配实际声源方向
+- ASR模块使用更大模型（`vosk-model-en-us-0.22`，但速度较慢）
 - 根据实际数据调整评分权重
 
 **功能扩展**：

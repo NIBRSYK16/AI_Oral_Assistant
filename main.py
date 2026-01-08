@@ -18,7 +18,8 @@ if project_root not in sys.path:
 
 # 导入各模块（使用包导入）
 from tts.tts_module import TextToSpeech
-from asr.raspberry_deploy import RaspberryPiAudioProcessor
+from se.raspberry_deploy import RaspberryPiAudioProcessor
+from asr.asr_module import SpeechRecognizer
 from scoring.speech_rater import SpeechRater, ScoreResult
 
 # 配置日志
@@ -44,6 +45,15 @@ class OralAssistant:
         # 初始化各模块
         self.tts = TextToSpeech(auto_load=True)
         self.audio_processor = RaspberryPiAudioProcessor()
+        
+        # 初始化ASR模块（语音识别）
+        try:
+            self.asr_recognizer = SpeechRecognizer()
+            logger.info("ASR模块初始化成功")
+        except Exception as e:
+            logger.warning(f"ASR模块初始化失败: {e}，将使用模拟文本")
+            self.asr_recognizer = None
+        
         self.speech_rater = SpeechRater()
         
         # 唤醒词检测器（可选）
@@ -53,7 +63,7 @@ class OralAssistant:
         
         if enable_wake_word:
             try:
-                from asr.wake_word_detector import WakeWordDetector
+                from se.wake_word_detector import WakeWordDetector
                 self.wake_detector = WakeWordDetector(
                     wake_keywords=["assistant", "voice assistant", "语音助手"]
                 )
@@ -70,6 +80,9 @@ class OralAssistant:
         
         # 录音文件路径
         self.recorded_audio_path = "recorded_response.wav"
+        
+        # ASR置信度缓存
+        self._last_asr_confidence = None
         
         # 运行模式
         self.continuous_mode = enable_wake_word and self.wake_detector is not None
@@ -347,24 +360,26 @@ class OralAssistant:
                 time.sleep(0.1)
             
             # 获取处理后的音频路径
-            # 注意：需要修改识别模块以返回音频路径
-            audio_path = "raspberry_output.wav"
+            audio_path = self.audio_processor.output_audio_path
             
             if not os.path.exists(audio_path):
-                logger.warning("音频文件不存在，使用默认路径")
+                logger.warning(f"音频文件不存在: {audio_path}，尝试使用默认路径")
                 audio_path = self.recorded_audio_path
                 # 如果默认路径也不存在，创建一个空文件提示
                 if not os.path.exists(audio_path):
                     logger.error("音频文件不存在，请检查录音模块")
                     return "", ""
             
-            # TODO: 调用ASR识别
-            # 这里需要集成ASR功能
-            # 暂时返回模拟文本
-            recognized_text = self._recognize_speech(audio_path)
+            # 调用ASR识别
+            recognized_text, asr_confidence = self._recognize_speech(audio_path)
             
             logger.info(f"识别结果: {recognized_text}")
+            if asr_confidence is not None:
+                logger.info(f"ASR置信度: {asr_confidence:.2f}")
             print(f"\n识别结果: {recognized_text}")
+            
+            # 保存置信度供评分使用
+            self._last_asr_confidence = asr_confidence
             
             return recognized_text, audio_path
             
@@ -373,23 +388,34 @@ class OralAssistant:
             print(f"录音失败: {e}")
             return "", ""
     
-    def _recognize_speech(self, audio_path: str) -> str:
+    def _recognize_speech(self, audio_path: str) -> tuple:
         """
         语音识别
-        简化实现：返回提示文本
-        实际应该调用ASR模块（如whisper、vosk等）
-        """
-        # TODO: 集成ASR模块
-        # 可以使用whisper或vosk进行本地识别
-        # 示例：
-        # import whisper
-        # model = whisper.load_model("base")
-        # result = model.transcribe(audio_path)
-        # return result["text"]
         
-        # 临时返回提示
-        logger.warning("ASR功能未实现，使用模拟文本")
-        return "I think the most important quality for a friend is honesty. A good friend should be trustworthy and reliable."
+        Args:
+            audio_path: 音频文件路径
+            
+        Returns:
+            (recognized_text, confidence) 元组
+        """
+        if self.asr_recognizer is None or not self.asr_recognizer.is_available():
+            logger.warning("ASR模块不可用，使用模拟文本")
+            return "I think the most important quality for a friend is honesty. A good friend should be trustworthy and reliable.", None
+        
+        try:
+            # 使用ASR模块进行识别
+            text, confidence = self.asr_recognizer.recognize_with_confidence(audio_path)
+            
+            if not text or len(text.strip()) == 0:
+                logger.warning("ASR识别结果为空，使用模拟文本")
+                return "I think the most important quality for a friend is honesty. A good friend should be trustworthy and reliable.", None
+            
+            return text, confidence
+            
+        except Exception as e:
+            logger.error(f"ASR识别失败: {e}")
+            # 返回模拟文本作为备选
+            return "I think the most important quality for a friend is honesty. A good friend should be trustworthy and reliable.", None
     
     def _score_response(self, audio_path: str, text: str, question_text: str = None) -> ScoreResult:
         """
@@ -407,10 +433,13 @@ class OralAssistant:
         print("\n正在评分，请稍候...")
         
         try:
+            # 获取ASR置信度（如果可用）
+            asr_confidence = getattr(self, '_last_asr_confidence', None)
+            
             result = self.speech_rater.score(
                 audio_path=audio_path,
                 text=text,
-                asr_confidence=None,  # 如果ASR提供置信度，可以传入
+                asr_confidence=asr_confidence,  # 传入ASR置信度
                 task_type="independent",
                 reference_text=question_text
             )
