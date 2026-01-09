@@ -41,6 +41,7 @@ class XunfeiRater:
         self.host_url = XUNFEI_CONFIG["HostUrl"]
         self.result = None
         self.error_msg = None
+        self.extracted_text_from_rejected = None
         
     def create_url(self):
         """生成鉴权url"""
@@ -68,21 +69,25 @@ class XunfeiRater:
         url = url + '?' + urlencode(v)
         return url
 
-    def score(self, audio_path: str, text: str) -> Optional[Dict]:
+    def score(self, audio_path: str, text: str, allow_retry: bool = True, category_override: str = None) -> Optional[Dict]:
         """
         调用讯飞接口进行评分
         
         Args:
             audio_path: 音频文件路径
             text: 评测文本
+            allow_retry: 是否允许在拒绝时使用提取文本重试
+            category_override: 强制使用的评测模式（如 "read_chapter"）
             
         Returns:
             评分结果字典 (解析后的JSON)
         """
         self.result = None
         self.error_msg = None
+        self.extracted_text_from_rejected = None # 重置
         self.audio_path = audio_path
         self.text = text
+        self.category_override = category_override  # 保存覆盖设置
         
         websocket.enableTrace(False)
         wsUrl = self.create_url()
@@ -95,8 +100,29 @@ class XunfeiRater:
         # 阻塞直到完成
         ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
         
+        # 自动重试机制：如果首次评分被拒绝但提取出了文本，用提取出的文本重试一次
+        if allow_retry and self.extracted_text_from_rejected:
+            # 只有当提取出的单词数量足够多才重试，避免只识别出"a", "the"这种
+            word_count = len(self.extracted_text_from_rejected.split())
+            if word_count >= 3:
+                logger.info(f"第一次评分被拒绝，但提取到了 {word_count} 个单词: {self.extracted_text_from_rejected[:50]}...")
+                logger.info("正在尝试使用提取的文本进行第二次评分 (Category: read_chapter)...")
+                
+                # 递归调用，但禁止再次重试以防死循环
+                # 关键修改：重试时强制使用 read_chapter 模式，因为此时 text 是用户的实际回答
+                retry_result = self.score(audio_path, self.extracted_text_from_rejected, allow_retry=False, category_override="read_chapter")
+                if retry_result:
+                    # 记录此次评分使用的是识别修正后的文本
+                    retry_result["recognized_text"] = self.extracted_text_from_rejected
+                    return retry_result
+            else:
+                logger.warning(f"提取文本太短 ({word_count} words)，放弃重试。")
+
         if self.error_msg:
             logger.error(f"讯飞评分出错: {self.error_msg}")
+            # 如果出错但有部分结果（例如提取到了0分），还是返回结果
+            if self.result:
+                return self.result
             return None
             
         return self.result
@@ -149,6 +175,27 @@ class XunfeiRater:
                             elif str(except_info) == "28676":
                                 logger.error("错误码 28676 说明：语音与文本/题目不匹配或匹配度过低。原因可能是：1. 录音不清晰/噪音过大 2. 声音太小导致只识别到只言片语 3. 说的是中文而非英文")
                             self.error_msg = f"Audio Rejected: No valid speech detected (Error {except_info})"
+                            
+                            # === 尝试从XML中拯救（提取）已识别的内容 ===
+                            try:
+                                extracted_words = []
+                                # 遍历所有的 sentence 和 word 节点
+                                for sentence in root.iter('sentence'):
+                                    for word in sentence.iter('word'):
+                                        content = word.attrib.get('content')
+                                        # 过滤掉标点符号或空内容
+                                        if content and content.strip():
+                                            # 过滤掉讯飞的特殊标记词，如静音(sil)和噪音(fil)
+                                            if content.strip() in ['sil', 'fil']:
+                                                continue
+                                            extracted_words.append(content)
+                                
+                                if extracted_words:
+                                    self.extracted_text_from_rejected = " ".join(extracted_words)
+                                    logger.info(f">>> 成功从拒绝结果中“打捞”回识别内容: {self.extracted_text_from_rejected}")
+                            except Exception as parse_e:
+                                logger.warning(f"尝试提取识别内容失败: {parse_e}")
+                            
                             # 即使被拒绝，后续可能还是会提取到 0 分，但至少日志里有了明确警告
                             break
                             
@@ -163,8 +210,10 @@ class XunfeiRater:
                         # 讯飞是5分制，我们需要转换成0-4分或保留
                         score_val = float(score_node.attrib.get('total_score', 0))
                         self.result['total_score'] = score_val
-                        # 转换到0-4分制 (5分 -> 4分)
-                        self.result['converted_score'] = (score_val / 5.0) * 4.0
+                        # 转换到1.5-4分制 (5分 -> 4分, 0分 -> 1.5分)
+                        # Norm = val / 5.0 => [0, 1]
+                        # Mapped = 1.5 + Norm * 2.5
+                        self.result['converted_score'] = 1.5 + (score_val / 5.0) * 2.5
                         
                         # 提取更多细节 (如果存在)
                         for attr in ['accuracy_score', 'fluency_score', 'integrity_score', 'standard_score']:
@@ -212,9 +261,12 @@ class XunfeiRater:
                     
                     # 第一帧处理
                     if status == STATUS_FIRST_FRAME:
+                        # 确定使用的 category
+                        category = self.category_override if self.category_override else XUNFEI_CONFIG["Category"]
+                        
                         # 如果是topic模式，需要处理文本格式
                         text_payload = self.text
-                        if XUNFEI_CONFIG["Category"] == "topic":
+                        if category == "topic":
                             # 确保文本符合[topic] 1. xxx 格式
                             if not text_payload.strip().startswith("[topic]"):
                                 # 假设传入的是题目本身，自动添加前缀
@@ -223,20 +275,16 @@ class XunfeiRater:
                                 if clean_title.startswith("1."):
                                     clean_title = clean_title[2:].strip()
                                 text_payload = f"[topic]\n1. {clean_title}"
-                        elif XUNFEI_CONFIG["Category"] == "read_chapter":
-                            # 关键修改：如果是read_chapter模式用于模拟自由说
-                            # 我们需要在文本前自动加上ASR识别出的内容(或者至少不强制它必须是题目)
-                            # 但目前 self.text 仅仅是题目。
-                            # 临时方案：如果发现文本很短（像题目），我们假设用户说了很多
-                            # 注意：真正的解决方案需要先ASR转文字，然后把转出来的文字作为标准答案给讯飞
+                        elif category == "read_chapter":
+                            # 如果是 read_chapter，直接使用文本即可，无需特殊格式
                             pass
 
-                        logger.info(f"发送给讯飞的评测文本({XUNFEI_CONFIG['Category']}): {text_payload}")
+                        logger.info(f"发送给讯飞的评测文本({category}): {text_payload}")
 
                         d = {
                             "common": {"app_id": self.appid},
                             "business": {
-                                "category": XUNFEI_CONFIG["Category"],
+                                "category": category,
                                 "sub": XUNFEI_CONFIG["Sub"],
                                 "ent": XUNFEI_CONFIG["Ent"],
                                 "cmd": "ssb",

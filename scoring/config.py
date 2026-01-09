@@ -91,7 +91,7 @@ XUNFEI_CONFIG = {
     'Ent': 'en_vip',
     # 策略变更：由于topic模式严格要求题目匹配，我们改用read_chapter模式
     # 并将"题目+用户回答的文本"作为grade_text传给讯飞，实现"伪自由说"评分
-    'Category': 'read_chapter',
+    'Category': 'topic',
 }
 
 # 综合评分权重配置

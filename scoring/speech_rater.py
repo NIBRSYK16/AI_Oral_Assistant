@@ -57,7 +57,8 @@ class ScoreResult:
     
     def __init__(self, raw_score: float, delivery_score: float, language_score: float,
                  delivery_features: Dict, language_features: Dict,
-                 feedback_en: str, feedback_zh: str):
+                 feedback_en: str, feedback_zh: str,
+                 recognized_text: Optional[str] = None):
         self.raw_score = raw_score
         self.delivery_score = delivery_score
         self.language_score = language_score
@@ -65,6 +66,7 @@ class ScoreResult:
         self.language_features = language_features
         self.feedback_en = feedback_en
         self.feedback_zh = feedback_zh
+        self.recognized_text = recognized_text
     
     def to_dict(self) -> Dict:
         """转换为字典"""
@@ -76,6 +78,7 @@ class ScoreResult:
             "language_features": self.language_features,
             "feedback_en": self.feedback_en,
             "feedback_zh": self.feedback_zh,
+            "recognized_text": self.recognized_text
         }
 
 
@@ -168,23 +171,27 @@ class SpeechRater:
             
             # 使用讯飞结果进行加权融合 (如果存在)
             if xunfei_result and 'total_score' in xunfei_result:
-                # 1. 获取讯飞分数 (转换到0-4分制)
+                # 1. 获取讯飞分数 (转换到1.5-4分制)
                 if 'converted_score' in xunfei_result:
                     xunfei_score = xunfei_result['converted_score']
                 else:
-                    xunfei_score = xunfei_result['total_score'] / 5.0 * 4.0
+                    xunfei_score = 1.5 + (xunfei_result['total_score'] / 5.0 * 2.5)
                 
                 # 2. 尝试融合维度分数 (如果有细分维度)
+                # 注意：delivery_score, language_score 此时还是 0-1 的归一化值，需要保持在这里处理，
+                # 最后输出时才统一转 1.5-4
                 if 'fluency_score' in xunfei_result:
                     xf_delivery = xunfei_result['fluency_score'] / 5.0 
-                    # 发音分 = 本地 * 0.4 + 讯飞 * 0.6
+                    # 发音分 (保持0-1) = 本地 * 0.4 + 讯飞 * 0.6
                     delivery_score = delivery_score * SCORING_WEIGHTS["local_algorithm"] + xf_delivery * SCORING_WEIGHTS["large_model"]
                     
                 if 'accuracy_score' in xunfei_result:
                     xf_language = xunfei_result['accuracy_score'] / 5.0
                     language_score = language_score * SCORING_WEIGHTS["local_algorithm"] + xf_language * SCORING_WEIGHTS["large_model"]
                 
-                # 3. 计算加权总分
+                # 3. 计算加权总分 (local_score 已经是 1.5-4 分了，需要在 score_calculator 里面改过了)
+                # 实际上 calculate_final_score 已经被改为返回 1.5-4
+                # 所以这里 xunfei_score 也是 1.5-4
                 final_score = (local_score * SCORING_WEIGHTS["local_algorithm"] + 
                               xunfei_score * SCORING_WEIGHTS["large_model"])
                 
@@ -199,17 +206,21 @@ class SpeechRater:
             feedback = self.feedback_generator.generate_feedback(score_result_dict)
             
             # 5. 构建结果对象
+            # 尝试提取讯飞返回的识别文本
+            recognized_text = xunfei_result.get("recognized_text") if xunfei_result else None
+
             result = ScoreResult(
                 raw_score=final_score,
-                delivery_score=delivery_score * 4,  # 转换为0-4分
-                language_score=language_score * 4,
+                delivery_score=1.5 + (delivery_score * 2.5),  # 转换为1.5-4分
+                language_score=1.5 + (language_score * 2.5),
                 delivery_features=delivery_features_raw,
                 language_features=language_features_raw,
                 feedback_en=feedback["en"],
-                feedback_zh=feedback["zh"]
+                feedback_zh=feedback["zh"],
+                recognized_text=recognized_text
             )
             
-            logger.info(f"评分完成: 总分={final_score:.2f}, 发音={delivery_score*4:.2f}, 内容={language_score*4:.2f}")
+            logger.info(f"评分完成: 总分={final_score:.2f}, 发音={1.5 + delivery_score*2.5:.2f}, 内容={1.5 + language_score*2.5:.2f}")
             
             return result
             

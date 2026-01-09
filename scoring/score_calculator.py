@@ -28,17 +28,18 @@ class ScoreCalculator:
             language_score: 内容分数（0-1）
             
         Returns:
-            最终分数（0-4）
+            最终分数（1.5-4）
         """
-        # 加权求和
+        # 加权求和 (得到 0-1)
         combined_score = (delivery_score * self.delivery_weight + 
                          language_score * self.language_weight)
         
-        # 缩放到0-4分
-        final_score = combined_score * self.max_score
+        # 映射到 1.5 - 4 分
+        # Formula: 1.5 + score * 2.5
+        final_score = 1.5 + (combined_score * 2.5)
         
         # 确保在有效范围内
-        final_score = max(self.min_score, min(self.max_score, final_score))
+        final_score = max(1.5, min(self.max_score, final_score))
         
         return round(final_score, 2)
     
@@ -60,8 +61,8 @@ class ScoreCalculator:
         
         return {
             "final_score": final_score,
-            "delivery_score": round(delivery_score * 4, 2),  # 转换为0-4分
-            "language_score": round(language_score * 4, 2),
+            "delivery_score": round(1.5 + (delivery_score * 2.5), 2),  # 转换为1.5-4分
+            "language_score": round(1.5 + (language_score * 2.5), 2),
             "delivery_features": delivery_features,
             "language_features": language_features,
             "max_score": self.max_score,

@@ -9,6 +9,10 @@ import time
 import random
 import logging
 import threading
+import shutil
+import json
+import datetime
+import hashlib
 from pathlib import Path
 
 # 添加项目根目录到路径（只添加一次，避免模块冲突）
@@ -78,6 +82,16 @@ class OralAssistant:
         self.question_bank_path = os.path.join(os.path.dirname(__file__), "doc", "口语题库.docx")
         self.questions = self._load_questions()
         
+        # 音频缓存配置
+        self.cache_dir = os.path.join(project_root, "assets", "audio_cache")
+        self.fixed_phrases = {
+            "welcome": "Hello, I'm ready to help you practice English.",
+            "instruction": "You have 15 seconds to prepare and 45 seconds to answer.",
+            "start_answer": "Please start your answer now.",
+            "goodbye": "Goodbye! Keep practicing!"
+        }
+        self._init_audio_cache()
+        
         # 录音文件路径
         self.recorded_audio_path = "recorded_response.wav"
         
@@ -94,6 +108,69 @@ class OralAssistant:
         with self._wake_lock:
             self._wake_detected = True
         logger.info(f"唤醒词检测回调: {keyword}")
+
+    def _init_audio_cache(self):
+        """初始化音频缓存，检查更新"""
+        logger.info("正在检查音频缓存...")
+        print("正在检查语音资源...")
+        
+        # 1. 确保目录结构
+        fixed_dir = os.path.join(self.cache_dir, "fixed")
+        questions_dir = os.path.join(self.cache_dir, "questions")
+        os.makedirs(fixed_dir, exist_ok=True)
+        os.makedirs(questions_dir, exist_ok=True)
+        
+        # 2. 处理固定短语
+        for key, text in self.fixed_phrases.items():
+            path = os.path.join(fixed_dir, f"{key}.wav")
+            if not os.path.exists(path):
+                logger.info(f"生成固定音频: {key}")
+                self.tts.synthesize_to_file(text, path)
+                
+        # 3. 处理题库
+        current_hashes = set()
+        updated_count = 0
+        
+        # 扫描现有题目并生成音频
+        for question in self.questions:
+            # 使用MD5生成文件名
+            q_hash = hashlib.md5(question.encode('utf-8')).hexdigest()
+            current_hashes.add(q_hash)
+            
+            path = os.path.join(questions_dir, f"{q_hash}.wav")
+            if not os.path.exists(path):
+                logger.info(f"生成新题目音频: {question[:20]}...")
+                print(f"正在生成题目音频: {question[:30]}...")
+                self.tts.synthesize_to_file(question, path)
+                updated_count += 1
+                
+        # 清理已删除题目的音频
+        removed_count = 0
+        for filename in os.listdir(questions_dir):
+            if filename.endswith('.wav'):
+                file_hash = filename[:-4]
+                if file_hash not in current_hashes:
+                    os.remove(os.path.join(questions_dir, filename))
+                    removed_count += 1
+                    
+        if updated_count > 0 or removed_count > 0:
+            msg = f"资源更新完成: 新增 {updated_count} 条，删除 {removed_count} 条"
+            logger.info(msg)
+            print(msg)
+        else:
+            logger.info("语音资源已就绪")
+
+    def _play_cached(self, key: str, subdir: str = "fixed"):
+        """播放缓存音频"""
+        path = os.path.join(self.cache_dir, subdir, f"{key}.wav")
+        if os.path.exists(path):
+            self.tts.play_wav_file(path, blocking=True)
+        else:
+            logger.warning(f"缓存音频丢失: {path}")
+            # 降级：如果找不到文件，尝试实时合成（如果是固定短语）
+            if subdir == "fixed" and key in self.fixed_phrases:
+                self.tts.speak(self.fixed_phrases[key], blocking=True)
+
     
     def _load_questions(self) -> list:
         """
@@ -167,7 +244,7 @@ class OralAssistant:
                             self._wake_detected = False
                             logger.info("检测到唤醒词，开始练习")
                             print("\n✓ 检测到唤醒词！")
-                            self.tts.speak("Hello, I'm ready to help you practice English.", blocking=True)
+                            self._play_cached("welcome")
                             return True
                     
                     # 非阻塞检查用户输入（使用select或timeout）
@@ -220,7 +297,7 @@ class OralAssistant:
                         # 检测唤醒关键词
                         if any(keyword.lower() in user_input_lower for keyword in wake_keywords):
                             logger.info(f"文本唤醒: {user_input}")
-                            self.tts.speak("Hello, I'm ready to help you practice English.", blocking=True)
+                            self._play_cached("welcome")
                             return True
                         elif user_input.lower() in ['start', 's']:
                             logger.info("用户直接开始")
@@ -301,16 +378,19 @@ class OralAssistant:
     
     def _present_question(self, question: str):
         """
-        出题：合成并播放题目
+        出题：播放缓存的题目音频
         """
         logger.info(f"出题: {question}")
         
-        # 合成题目文本
-        question_text = f"{question} You have 15 seconds to prepare and 45 seconds to answer."
-        
         # 播放题目
         print(f"\n题目: {question}")
-        self.tts.speak(question_text, blocking=True)
+        
+        # 1. 播放题目音频
+        q_hash = hashlib.md5(question.encode('utf-8')).hexdigest()
+        self._play_cached(q_hash, subdir="questions")
+        
+        # 2. 播放固定指令
+        self._play_cached("instruction")
     
     def _wait_preparation(self, duration: int = 15):
         """
@@ -327,7 +407,7 @@ class OralAssistant:
         print("\n准备时间结束！")
         
         # 提示开始答题
-        self.tts.speak("Please start your answer now.", blocking=True)
+        self._play_cached("start_answer")
     
     def _record_response(self, duration: int = 45):
         """
@@ -460,6 +540,11 @@ class OralAssistant:
         print("\n" + "="*50)
         print("评分结果")
         print("="*50)
+        
+        # 如果有ASR识别文本，打印出来
+        if hasattr(result, 'recognized_text') and result.recognized_text:
+            print(f"ASR识别内容 (修正后): {result.recognized_text}\n")
+            
         print(f"总分: {result.raw_score:.2f} / 4.0")
         print(f"发音分: {result.delivery_score:.2f} / 4.0")
         print(f"内容分: {result.language_score:.2f} / 4.0")
@@ -488,9 +573,65 @@ class OralAssistant:
     
     def _say_goodbye(self):
         """说再见"""
-        self.tts.speak("Goodbye! Keep practicing!", blocking=True)
+        self._play_cached("goodbye")
         print("\n再见！继续加油练习！")
     
+    def _save_history(self, question: str, audio_path: str, text: str, result: ScoreResult):
+        """
+        保存历史记录
+        将录音和评价结果保存到 history/timestamp 目录下
+        """
+        try:
+            # 生成时间戳
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # 创建目录结构
+            history_root = os.path.join(project_root, "history")
+            session_dir = os.path.join(history_root, timestamp)
+            os.makedirs(session_dir, exist_ok=True)
+            
+            # 1. 复制音频文件
+            target_audio_path = os.path.join(session_dir, "response.wav")
+            if os.path.exists(audio_path):
+                shutil.copy2(audio_path, target_audio_path)
+            else:
+                logger.warning(f"音频文件不存在，无法保存: {audio_path}")
+            
+            # 2. 保存完整报告 (JSON)
+            report_data = {
+                "timestamp": timestamp,
+                "question": question,
+                "recognized_text": text,
+                "score_result": result.to_dict()
+            }
+            
+            report_path = os.path.join(session_dir, "report.json")
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report_data, f, ensure_ascii=False, indent=2)
+                
+            # 3. 保存简易文本报告 (TXT)
+            txt_path = os.path.join(session_dir, "report.txt")
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(f"练习时间: {timestamp}\n")
+                f.write(f"题目: {question}\n")
+                f.write(f"识别回答: {text}\n")
+                f.write("-" * 30 + "\n")
+                f.write(f"总分: {result.raw_score:.2f} / 4.0\n")  # 分数已经是1.5-4区间
+                f.write(f"发音分: {result.delivery_score:.2f} / 4.0\n")
+                f.write(f"内容分: {result.language_score:.2f} / 4.0\n")
+                f.write("-" * 30 + "\n")
+                f.write("评价 (En):\n")
+                f.write(f"{result.feedback_en}\n\n")
+                f.write("评价 (Zh):\n")
+                f.write(f"{result.feedback_zh}\n")
+            
+            logger.info(f"历史记录已保存至: {session_dir}")
+            print(f"本次练习记录已保存")
+            
+        except Exception as e:
+            logger.error(f"保存历史记录失败: {e}")
+            print(f"保存历史记录失败: {e}")
+
     def run(self):
         """
         主运行流程
@@ -520,8 +661,16 @@ class OralAssistant:
                 try:
                     result = self._score_response(audio_path, text, question_text=question)
                     
+                    # 关键修改：如果评分过程提取了ASR识别文本，更新用于记录的text
+                    if hasattr(result, 'recognized_text') and result.recognized_text:
+                        text = result.recognized_text
+                        logger.info(f"更新记录文本为ASR识别结果: {text[:20]}...")
+
                     # 6. 播放评价
                     self._present_feedback(result)
+                    
+                    # 保存历史记录
+                    self._save_history(question, audio_path, text, result)
                     
                 except Exception as e:
                     logger.error(f"评分过程出错: {e}")
