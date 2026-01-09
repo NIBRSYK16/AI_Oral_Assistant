@@ -89,6 +89,8 @@ XUNFEI_CONFIG = {
     'HostUrl': 'wss://ise-api.xfyun.cn/v2/open-ise',
     'Sub': 'ise',
     'Ent': 'en_vip',
+    # 策略变更：由于topic模式严格要求题目匹配，我们改用read_chapter模式
+    # 并将"题目+用户回答的文本"作为grade_text传给讯飞，实现"伪自由说"评分
     'Category': 'topic',
 }
 

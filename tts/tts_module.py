@@ -214,6 +214,81 @@ class TextToSpeech:
         duration = len(text) * 0.1  # 估算时长
         sample_rate = AUDIO_CONFIG["sample_rate"]
         return np.zeros(int(duration * sample_rate), dtype=np.int16)
+
+    def synthesize_to_file(self, text: str, output_path: str) -> bool:
+        """
+        合成语音并保存到文件
+        
+        Args:
+            text: 要合成的文本
+            output_path: 输出文件路径(wav格式)
+            
+        Returns:
+            是否成功
+        """
+        if not self._is_loaded:
+            self.load_model()
+            
+        if not text or not text.strip():
+            return False
+            
+        # 文本预处理
+        text = self.text_processor.normalize_text(text)
+        
+        try:
+            import wave
+            
+            # 确保目录存在
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            if self._voice:
+                # Piper可以直接写入文件对象
+                with wave.open(output_path, 'wb') as wav_file:
+                    self._voice.synthesize_wav(text, wav_file)
+                return True
+            else:
+                # 降级方案：先合成内存再写入
+                audio_data = self._synthesize_onnx(text)
+                if audio_data is None:
+                    return False
+                    
+                # 写入wav
+                with wave.open(output_path, 'wb') as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(AUDIO_CONFIG["sample_rate"])
+                    # float32 -> int16
+                    pcm_data = (audio_data * 32767).astype(np.int16)
+                    wav_file.writeframes(pcm_data.tobytes())
+                return True
+                
+        except Exception as e:
+            logger.error(f"合成到文件失败: {e}")
+            return False
+
+    def play_wav_file(self, file_path: str, blocking: bool = True):
+        """
+        播放WAV文件
+        
+        Args:
+            file_path: WAV文件路径
+            blocking: 是否阻塞
+        """
+        if not os.path.exists(file_path):
+            logger.error(f"文件不存在: {file_path}")
+            return
+            
+        try:
+            import wave
+            with wave.open(file_path, 'rb') as wav_file:
+                frames = wav_file.readframes(wav_file.getnframes())
+                # 转换为float32格式
+                audio_data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                
+            self.audio_player.play(audio_data, blocking=blocking)
+            
+        except Exception as e:
+            logger.error(f"播放文件失败: {e}")
     
     def speak(self, text: str, blocking: bool = True):
         """

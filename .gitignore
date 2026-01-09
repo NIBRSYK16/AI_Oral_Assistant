@@ -8,4 +8,11 @@
 *.py[cod]
 *$py.class
 
+# usage history files
+history/*
+
+# models
+models/
+
 *.html
+*.wav

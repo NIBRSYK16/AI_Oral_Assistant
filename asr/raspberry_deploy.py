@@ -1,5 +1,5 @@
 """
-语音增强模块 - 树莓派部署 (Speech Enhancement)
+语音识别模块 - 树莓派部署
 负责录音、音频增强（波束形成+去噪）和音频保存
 """
 import numpy as np
@@ -109,9 +109,10 @@ class RaspberryPiAudioProcessor:
     def record_callback(self, in_data, frame_count, time_info, status):
         """录音回调函数"""
         if status:
-            if status == 2: # paInputOverflow
-                # 输入溢出在树莓派上很常见，降级为debug日志以减少干扰
-                logger.debug(f"录音回调状态异常(InputOverflow): {status}")
+            # status == 2 是 pauInputOverflow，在树莓派等非实时系统上很常见
+            # 通常意味着CPU稍微忙不过来，丢了一点点数据，如果不严重可以忽略
+            if status == 2:
+                logger.debug(f"录音回调提示 Input Overflow (Code {status}) - 可能丢失少量音频帧")
             else:
                 logger.warning(f"录音回调状态异常: {status}")
             
