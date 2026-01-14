@@ -49,10 +49,8 @@ class AudioAnalyzer:
     def detect_speech_segments(self, audio: np.ndarray) -> List[Tuple[float, float]]:
         """
         使用VAD检测语音段
-        
         Args:
             audio: 音频数据
-            
         Returns:
             语音段列表，每个元素为(start_time, end_time)
         """
