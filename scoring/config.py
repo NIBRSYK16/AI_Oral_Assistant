@@ -60,7 +60,7 @@ TEXT_CONFIG = {
 # 评分阈值
 SCORE_CONFIG = {
     "max_score": 4.0,          # 满分
-    "min_score": 0.0,          # 最低分
+    "min_score": 1.5,          # 最低分
     "delivery_weight": 0.5,    # 发音部分权重
     "language_weight": 0.5,    # 内容部分权重
 }

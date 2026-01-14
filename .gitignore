@@ -16,3 +16,6 @@ models/
 
 *.html
 *.wav
+
+doc/大纲.txt
+doc/rate.txt
